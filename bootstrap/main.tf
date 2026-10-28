@@ -1,9 +1,9 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  account_id = data.aws_caller_identity.current.account_id
-  repo       = "${var.github_owner}/${var.github_repo}"
-  oidc_host  = "token.actions.githubusercontent.com"
+  account_id     = data.aws_caller_identity.current.account_id
+  subject_prefix = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
+  oidc_host      = "token.actions.githubusercontent.com"
 }
 
 # 1. Tell AWS to trust GitHub as an identity provider (once per account)
@@ -33,8 +33,8 @@ data "aws_iam_policy_document" "plan_trust" {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
       values = [
-        "repo:${local.repo}:pull_request",
-        "repo:${local.repo}:ref:refs/heads/main",
+        "${local.subject_prefix}:pull_request",
+        "${local.subject_prefix}:ref:refs/heads/main",
       ]
     }
   }
@@ -61,7 +61,7 @@ data "aws_iam_policy_document" "apply_trust" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
-      values   = ["repo:${local.repo}:environment:${each.key}"]
+      values   = ["${local.subject_prefix}:environment:${each.key}"]
     }
   }
 }

@@ -40,3 +40,24 @@ variable "data_lake_name" {
   default     = "beejan-lake"
   description = "The project name used in main.tf's locals; it feeds resource names"
 }
+
+
+variable "github_owner_id" {
+  type        = string
+  description = "Numeric GitHub owner ID. Permanent, unlike the name."
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_owner_id))
+    error_message = "github_owner_id must be numeric."
+  }
+}
+
+variable "github_repo_id" {
+  type        = string
+  description = "Numeric GitHub repository ID. Permanent, unlike the name."
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repo_id))
+    error_message = "github_repo_id must be numeric."
+  }
+}
