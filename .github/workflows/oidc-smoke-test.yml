@@ -13,6 +13,14 @@ jobs:
     steps:
       # Negative test first: the apply role requires environment "dev",
       # which this job doesn't use, so this must FAIL.
+      - name: Show the OIDC claims GitHub sends (debug)
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
+          PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+')
+          while [ $(( ${#PAYLOAD} % 4 )) -ne 0 ]; do PAYLOAD="${PAYLOAD}="; done
+          echo "$PAYLOAD" | base64 -d | jq '{sub, aud, repository, repository_id, repository_owner_id, ref}'
+     
       - name: Try the apply role (expected to fail)
         id: negative
         continue-on-error: true
