@@ -1,0 +1,40 @@
+name: OIDC smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write     # lets the job request GitHub's identity token
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      # Negative test first: the apply role requires environment "dev",
+      # which this job doesn't use, so this must FAIL.
+      - name: Try the apply role (expected to fail)
+        id: negative
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::399707826015:role/gha-data-platform-dev-apply
+          aws-region: us-east-1
+
+      - name: Fail if the apply role was assumable
+        if: steps.negative.outcome == 'success'
+        run: |
+          echo "Security problem: the apply role was assumable outside its environment"
+          exit 1
+
+      - name: Assume the plan role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::399707826015:role/gha-data-platform-dev-plan
+          aws-region: us-east-1
+
+      - name: Who am I?
+        run: aws sts get-caller-identity
+
+      - name: Can the plan role see its own state?
+        run: aws s3 ls s3://beejan-cob-terraform-main-state/data-platform/dev/
