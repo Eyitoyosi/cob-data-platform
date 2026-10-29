@@ -1,0 +1,6 @@
+# Pipeline definition and the AWS roles it uses: highest sensitivity
+/.github/       @Osakpolor23 @IkennaNnamba
+/bootstrap/     @Osakpolor23 @IkennaNnamba
+
+# Infrastructure code
+/environments/  @Osakpolor23 @IkennaNnamba
