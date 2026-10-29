@@ -10,7 +10,7 @@ permissions:
 env:
   TF_IN_AUTOMATION: "true"   # tells Terraform it is running unattended
   TF_INPUT: "0"              # never wait for a prompt; fail instead
-  TF_VERSION: "1.15.9"       # replace with the output of `terraform version`
+  TF_VERSION: "1.15.9"       
 
 jobs:
   # Job 1: checks that need NO AWS credentials
