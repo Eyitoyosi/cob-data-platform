@@ -1,0 +1,155 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One deployment at a time for dev. The run waiting for approval holds the
+# queue, so don't leave approvals hanging. Never cancel a run in progress.
+concurrency:
+  group: terraform-apply-dev
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "0"
+  TF_VERSION: "1.15.9"   
+
+jobs:
+  plan:
+    name: Plan (dev)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Assume the plan role (read-only)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::399707826015:role/gha-data-platform-dev-plan
+          aws-region: us-east-1
+
+      - name: Init
+        run: terraform init
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -no-color -lock-timeout=5m -var-file=dev.tfvars \
+            -detailed-exitcode -out=tfplan 2>&1 | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          # 0 = no changes, 2 = changes, 1 = error
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          if [ "$code" -eq 2 ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the plan for reviewers
+        if: always() && steps.plan.outcome != 'skipped'
+        run: |
+          {
+            echo "## Terraform plan: dev"
+            echo
+            if [ "${{ steps.plan.outputs.has_changes }}" = "true" ]; then
+              terraform show -no-color tfplan > plan-readable.txt
+              echo "**$(grep -E '^Plan:' plan-readable.txt | tail -n 1)**"
+              if grep -qE 'will be destroyed|must be replaced' plan-readable.txt; then
+                echo
+                echo "**WARNING: this plan destroys or replaces resources. Read it carefully.**"
+              fi
+              echo
+              echo "Approve the deployment only if this is exactly what you expect."
+              echo
+              echo '```'
+              cat plan-readable.txt
+              echo '```'
+            elif [ "${{ steps.plan.outcome }}" = "success" ]; then
+              echo "**No changes. Nothing to deploy.**"
+            else
+              echo "**Plan failed.** See the job log."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save the plan for the apply job
+        if: steps.plan.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: tfplan-dev
+          path: environments/dev/tfplan
+          retention-days: 1
+          if-no-files-found: error
+
+  apply:
+    name: Apply (dev)
+    needs: plan
+    # Skipped when there is nothing to deploy, so nobody is asked to approve nothing
+    if: needs.plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    environment: dev          # the approval gate
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download the approved plan
+        uses: actions/download-artifact@v6
+        with:
+          name: tfplan-dev
+          path: environments/dev
+
+      # Credentials are requested only after approval is granted
+      - name: Assume the apply role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::399707826015:role/gha-data-platform-dev-apply
+          aws-region: us-east-1
+
+      - name: Init
+        run: terraform init
+
+      - name: Apply the saved plan
+        run: |
+          set -euo pipefail
+          terraform apply -no-color -input=false -lock-timeout=5m tfplan 2>&1 | tee apply.txt
+
+      - name: Report the result
+        if: always()
+        run: |
+          {
+            echo "## Deployment to dev: ${{ job.status }}"
+            echo
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Triggered by: @${{ github.actor }}"
+            echo "- Result: $(grep -E '^Apply complete!|^Error' apply.txt 2>/dev/null | head -n 1 || true)"
+          } >> "$GITHUB_STEP_SUMMARY"
