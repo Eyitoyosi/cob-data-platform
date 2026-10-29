@@ -1,0 +1,135 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"   # tells Terraform it is running unattended
+  TF_INPUT: "0"              # never wait for a prompt; fail instead
+  TF_VERSION: "1.15.9"       # replace with the output of `terraform version`
+
+jobs:
+  # Job 1: checks that need NO AWS credentials
+  static-checks:
+    name: Static checks (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [bootstrap, environments/dev]
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Format check
+        run: terraform fmt -check -recursive -diff
+
+      - name: Init (no backend, no credentials)
+        run: terraform init -backend=false
+
+      - name: Validate
+        run: terraform validate
+
+  # Job 2: the plan. Only runs if job 1 passed.
+  plan:
+    name: Plan (${{ matrix.environment }})
+    needs: static-checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # request the OIDC token
+      pull-requests: write   # post the plan comment
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: dev
+            role_arn: arn:aws:iam::399707826015:role/gha-data-platform-dev-plan
+    defaults:
+      run:
+        working-directory: environments/${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Assume the plan role (read-only)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ matrix.role_arn }}
+          aws-region: us-east-1
+
+      - name: Init (real backend)
+        run: terraform init
+
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -no-color -lock-timeout=5m \
+            -var-file="${{ matrix.environment }}.tfvars" \
+            -detailed-exitcode 2>&1 | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
+          # Only a real error should fail the job.
+          if [ "$code" -eq 1 ]; then exit 1; fi
+
+      - name: Post the plan to the pull request
+        if: always() && steps.plan.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ENVIRONMENT: ${{ matrix.environment }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          MARKER="<!-- terraform-plan:${ENVIRONMENT} -->"
+          SUMMARY=$(grep -E '^(Plan:|No changes\.)' plan.txt | tail -n 1 || true)
+          if [ -z "$SUMMARY" ]; then SUMMARY="Plan failed. See the details below."; fi
+
+          # PR comments are limited to 65,536 characters
+          head -c 60000 plan.txt > plan-trimmed.txt
+          if [ "$(wc -c < plan.txt)" -gt 60000 ]; then
+            echo "... truncated. See the workflow run for the full plan ..." >> plan-trimmed.txt
+          fi
+
+          {
+            echo "$MARKER"
+            echo "### Terraform plan: \`${ENVIRONMENT}\`"
+            echo "**${SUMMARY}**"
+            echo
+            echo "<details><summary>Show full plan</summary>"
+            echo
+            echo '```'
+            cat plan-trimmed.txt
+            echo '```'
+            echo "</details>"
+            echo
+            echo "Commit \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL})"
+          } > comment.md
+
+          # Update our previous comment if there is one, so a PR gets
+          # one comment per environment instead of one per push.
+          COMMENT_ID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" | head -n 1)
+
+          if [ -n "$COMMENT_ID" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" -F body=@comment.md
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F body=@comment.md
+          fi
