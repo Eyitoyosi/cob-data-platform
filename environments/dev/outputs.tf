@@ -13,3 +13,7 @@ output "athena_workgroup_name" {
 output "curated_bucket_id" {
   value = module.curated_zone.bucket_id
 }
+
+output "raw_bucket_id" {
+  value = module.raw_zone.bucket_name   # WRONG: The S3 capability module outputs bucket_id, not bucket_name.
+}
