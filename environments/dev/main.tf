@@ -28,3 +28,10 @@ resource "aws_s3_object" "orders_sample" {
   source      = "${path.module}/../../data/sample/orders.csv"
   source_hash = filemd5("${path.module}/../../data/sample/orders.csv")
 }
+
+# Curated zone: cleaned, query-ready data.
+module "curated_zone" {
+  source      = "git::https://github.com/Eyitoyosi/cob.git//modules/storage-s3?ref=v0.1.3"
+  name        = "${local.project}-curated"
+  environment = var.environment
+}

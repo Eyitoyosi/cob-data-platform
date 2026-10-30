@@ -9,3 +9,7 @@ output "glue_database_name" {
 output "athena_workgroup_name" {
   value = module.catalog.athena_workgroup_name
 }
+
+output "curated_bucket_id" {
+  value = module.curated_zone.bucket_id
+}
