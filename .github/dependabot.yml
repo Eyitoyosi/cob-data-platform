@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions in .github/workflows/ current.
+  # Note: Dependabot-triggered runs get no OIDC token, so its PRs fail the
+  # `Plan (dev)` check until a maintainer pushes a commit as themselves.
+  # See docs/PIPELINE.md, Troubleshooting.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
